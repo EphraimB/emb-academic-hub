@@ -240,3 +240,32 @@ export function getPendingTasksWithPriority(): TaskItem[] {
   `);
   return stmt.all(current.id) as TaskItem[];
 }
+
+export function getTodayCourses(semesterId: string, dayOfWeek: number): Course[] {
+  const stmt = db.prepare('SELECT * FROM courses WHERE semesterId = ?');
+  const courses = stmt.all(semesterId) as Course[];
+  return courses.filter(c => {
+    try {
+      const days = JSON.parse(c.meetingDays) as number[];
+      return days.includes(dayOfWeek);
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function getAssignmentsDueInRange(
+  semesterId: string, 
+  startDateStr: string, 
+  endDateStr: string
+): (Assignment & { courseName: string })[] {
+  const stmt = db.prepare(`
+    SELECT a.id, a.courseId, a.title, a.dueDate, a.priority, c.name as courseName
+    FROM assignments a
+    JOIN courses c ON a.courseId = c.id
+    WHERE c.semesterId = ? AND a.dueDate >= ? AND a.dueDate <= ?
+    ORDER BY a.dueDate ASC, a.priority DESC
+  `);
+  return stmt.all(semesterId, startDateStr, endDateStr) as (Assignment & { courseName: string })[];
+}
+
