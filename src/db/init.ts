@@ -40,5 +40,29 @@ export async function initDb(): Promise<void> {
     )
   `).run();
 
-  console.log('[Database] SQLite initialized and tables verified.');
+  // Create assignments table
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS assignments (
+      id TEXT PRIMARY KEY,
+      courseId TEXT NOT NULL,
+      title TEXT NOT NULL,
+      dueDate TEXT NOT NULL,
+      priority INTEGER NOT NULL,
+      FOREIGN KEY(courseId) REFERENCES courses(id) ON DELETE CASCADE
+    )
+  `).run();
+
+  // Create tasks table
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      assignmentId TEXT NOT NULL,
+      title TEXT NOT NULL,
+      estimatedMinutes INTEGER NOT NULL,
+      completed INTEGER NOT NULL CHECK (completed IN (0, 1)),
+      FOREIGN KEY(assignmentId) REFERENCES assignments(id) ON DELETE CASCADE
+    )
+  `).run();
+
+  console.log('[Database] SQLite initialized and all tables verified.');
 }

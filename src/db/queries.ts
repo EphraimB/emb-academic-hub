@@ -15,6 +15,22 @@ export interface Course {
   location: string | null;
 }
 
+export interface Assignment {
+  id: string;
+  courseId: string;
+  title: string;
+  dueDate: string;     // ISO Date string (e.g. '2026-06-15')
+  priority: number;    // 1 (Low) to 3 (High)
+}
+
+export interface Task {
+  id: string;
+  assignmentId: string;
+  title: string;
+  estimatedMinutes: number;
+  completed: number;   // 0 or 1
+}
+
 // Semesters Queries
 export function addSemester(id: string, name: string): void {
   const stmt = db.prepare('INSERT OR IGNORE INTO semesters (id, name) VALUES (?, ?)');
@@ -38,4 +54,52 @@ export function addCourse(course: Course): void {
 export function getCoursesBySemester(semesterId: string): Course[] {
   const stmt = db.prepare('SELECT * FROM courses WHERE semesterId = ?');
   return stmt.all(semesterId) as Course[];
+}
+
+export function findCourseByName(name: string): Course | null {
+  const stmt = db.prepare('SELECT * FROM courses WHERE name LIKE ?');
+  return (stmt.get(name) as Course) || null;
+}
+
+// Assignments Queries
+export function addAssignment(assignment: Assignment): void {
+  const stmt = db.prepare(`
+    INSERT INTO assignments (id, courseId, title, dueDate, priority)
+    VALUES (@id, @courseId, @title, @dueDate, @priority)
+  `);
+  stmt.run(assignment);
+}
+
+export function getAssignmentsByCourse(courseId: string): Assignment[] {
+  const stmt = db.prepare('SELECT * FROM assignments WHERE courseId = ? ORDER BY dueDate ASC');
+  return stmt.all(courseId) as Assignment[];
+}
+
+export function findAssignmentByTitle(title: string): Assignment | null {
+  const stmt = db.prepare('SELECT * FROM assignments WHERE title LIKE ?');
+  return (stmt.get(title) as Assignment) || null;
+}
+
+// Tasks Queries
+export function addTask(task: Task): void {
+  const stmt = db.prepare(`
+    INSERT INTO tasks (id, assignmentId, title, estimatedMinutes, completed)
+    VALUES (@id, @assignmentId, @title, @estimatedMinutes, @completed)
+  `);
+  stmt.run(task);
+}
+
+export function getTasksByAssignment(assignmentId: string): Task[] {
+  const stmt = db.prepare('SELECT * FROM tasks WHERE assignmentId = ?');
+  return stmt.all(assignmentId) as Task[];
+}
+
+export function findTaskByTitle(title: string): Task | null {
+  const stmt = db.prepare('SELECT * FROM tasks WHERE title LIKE ?');
+  return (stmt.get(title) as Task) || null;
+}
+
+export function setTaskCompletion(taskId: string, completed: number): void {
+  const stmt = db.prepare('UPDATE tasks SET completed = ? WHERE id = ?');
+  stmt.run(completed, taskId);
 }
