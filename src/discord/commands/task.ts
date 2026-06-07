@@ -56,12 +56,23 @@ const taskCommand: Command = {
             .setRequired(true)
             .setAutocomplete(true)
         )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('delete')
+        .setDescription('Delete a task from the database')
+        .addStringOption(option =>
+          option.setName('id')
+            .setDescription('Select the task to delete')
+            .setRequired(true)
+            .setAutocomplete(true)
+        )
     ),
   async execute(interaction: ChatInputCommandInteraction) {
     const subcommand = interaction.options.getSubcommand();
 
     // ==========================================
-    // SUBCOMMAND: /task add
+    // SUBCOMMAND: /task add (Create)
     // ==========================================
     if (subcommand === 'add') {
       const courseName = interaction.options.getString('course', true);
@@ -168,7 +179,7 @@ const taskCommand: Command = {
     }
 
     // ==========================================
-    // SUBCOMMAND: /task list
+    // SUBCOMMAND: /task list (Read)
     // ==========================================
     if (subcommand === 'list') {
       const courseName = interaction.options.getString('course');
@@ -245,7 +256,7 @@ const taskCommand: Command = {
     }
 
     // ==========================================
-    // SUBCOMMAND: /task done
+    // SUBCOMMAND: /task done (Update)
     // ==========================================
     if (subcommand === 'done') {
       const taskId = interaction.options.getString('id', true);
@@ -274,23 +285,60 @@ const taskCommand: Command = {
       }
       return;
     }
+
+    // ==========================================
+    // SUBCOMMAND: /task delete (Delete)
+    // ==========================================
+    if (subcommand === 'delete') {
+      const taskId = interaction.options.getString('id', true);
+
+      // Verify task exists
+      const task = db.prepare('SELECT title FROM tasks WHERE id = ?').get(taskId) as { title: string } | undefined;
+      if (!task) {
+        await interaction.reply({
+          content: 'Error: Selected task was not found.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
+
+      try {
+        db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+        await interaction.reply({
+          content: `Successfully deleted task **${task.title}**! 🗑️`
+        });
+      } catch (err) {
+        console.error('Error deleting task:', err);
+        await interaction.reply({
+          content: 'Failed to delete task.',
+          flags: ['Ephemeral'] as any
+        });
+      }
+      return;
+    }
   },
 
   async autocomplete(interaction: AutocompleteInteraction) {
     const focusedValue = interaction.options.getFocused();
+    const subcommand = interaction.options.getSubcommand();
 
     try {
-      // Find all pending tasks with course names
-      const pendingTasks = db.prepare(`
-        SELECT t.id, t.title, c.name as courseName 
-        FROM tasks t
-        JOIN assignments a ON t.assignmentId = a.id
-        JOIN courses c ON a.courseId = c.id
-        WHERE t.completed = 0
-      `).all() as { id: string; title: string; courseName: string }[];
+      // If marking done, show only pending tasks. If deleting, show all tasks.
+      const query = subcommand === 'done'
+        ? `SELECT t.id, t.title, c.name as courseName 
+           FROM tasks t
+           JOIN assignments a ON t.assignmentId = a.id
+           JOIN courses c ON a.courseId = c.id
+           WHERE t.completed = 0`
+        : `SELECT t.id, t.title, c.name as courseName 
+           FROM tasks t
+           JOIN assignments a ON t.assignmentId = a.id
+           JOIN courses c ON a.courseId = c.id`;
+
+      const tasks = db.prepare(query).all() as { id: string; title: string; courseName: string }[];
 
       // Filter based on input
-      const filtered = pendingTasks
+      const filtered = tasks
         .filter(t => t.title.toLowerCase().includes(focusedValue.toLowerCase()))
         .map(t => {
           const name = `${t.title} [${t.courseName}]`;
