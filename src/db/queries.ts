@@ -209,6 +209,23 @@ export function setTaskCompletion(taskId: string, completed: number): void {
   stmt.run(completed, taskId);
 }
 
+export function updateTask(taskId: string, updates: Partial<Omit<Task, 'id' | 'assignmentId'>>): void {
+  const keys = Object.keys(updates);
+  if (keys.length === 0) return;
+
+  const setClauses = keys.map(key => `${key} = ?`).join(', ');
+  const values = keys.map(key => (updates as any)[key]);
+  values.push(taskId);
+
+  const stmt = db.prepare(`UPDATE tasks SET ${setClauses} WHERE id = ?`);
+  stmt.run(...values);
+}
+
+export function deleteTask(taskId: string): void {
+  db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+}
+
+
 // Scheduler Query Helper (limited to current active semester)
 export function getPendingTasksWithPriority(): TaskItem[] {
   const current = getCurrentSemester();

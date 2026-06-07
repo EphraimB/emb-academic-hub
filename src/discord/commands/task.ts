@@ -9,7 +9,9 @@ import {
   getAllSemesters, 
   getCurrentSemester,
   addSemester, 
-  addCourse 
+  addCourse,
+  updateTask,
+  deleteTask
 } from '../../db/queries';
 import { db } from '../../db/init';
 
@@ -56,6 +58,36 @@ const taskCommand: Command = {
             .setDescription('Select the task to complete')
             .setRequired(true)
             .setAutocomplete(true)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('edit')
+        .setDescription('Edit details of a task')
+        .addStringOption(option =>
+          option.setName('id')
+            .setDescription('Select the task to edit')
+            .setRequired(true)
+            .setAutocomplete(true)
+        )
+        .addStringOption(option =>
+          option.setName('title')
+            .setDescription('New task title')
+            .setRequired(false)
+        )
+        .addIntegerOption(option =>
+          option.setName('minutes')
+            .setDescription('New estimated duration in minutes')
+            .setRequired(false)
+        )
+        .addIntegerOption(option =>
+          option.setName('completed')
+            .setDescription('Task completion status')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Completed (Yes)', value: 1 },
+              { name: 'Incomplete (No)', value: 0 }
+            )
         )
     )
     .addSubcommand(subcommand =>
@@ -326,6 +358,68 @@ const taskCommand: Command = {
     }
 
     // ==========================================
+    // SUBCOMMAND: /task edit
+    // ==========================================
+    if (subcommand === 'edit') {
+      const taskId = interaction.options.getString('id', true);
+      const title = interaction.options.getString('title');
+      const minutes = interaction.options.getInteger('minutes');
+      const completed = interaction.options.getInteger('completed');
+      const semester = getCurrentSemester();
+
+      if (!semester) {
+        await interaction.reply({
+          content: 'No semester is currently active.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
+
+      // Verify task exists in active semester
+      const task = db.prepare(`
+        SELECT t.title FROM tasks t 
+        JOIN assignments a ON t.assignmentId = a.id
+        JOIN courses c ON a.courseId = c.id
+        WHERE t.id = ? AND c.semesterId = ?
+      `).get(taskId, semester.id) as { title: string } | undefined;
+
+      if (!task) {
+        await interaction.reply({
+          content: 'Error: Selected task was not found or is in another semester.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
+
+      const updates: any = {};
+      if (title) updates.title = title;
+      if (minutes !== null && minutes !== undefined) updates.estimatedMinutes = minutes;
+      if (completed !== null && completed !== undefined) updates.completed = completed;
+
+      if (Object.keys(updates).length === 0) {
+        await interaction.reply({
+          content: 'No updates specified. Use options to update fields.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
+
+      try {
+        updateTask(taskId, updates);
+        await interaction.reply({
+          content: `Successfully updated details for task **${task.title}**! ✏️`
+        });
+      } catch (err) {
+        console.error('Error updating task:', err);
+        await interaction.reply({
+          content: 'Failed to update task.',
+          flags: ['Ephemeral'] as any
+        });
+      }
+      return;
+    }
+
+    // ==========================================
     // SUBCOMMAND: /task delete
     // ==========================================
     if (subcommand === 'delete') {
@@ -357,7 +451,7 @@ const taskCommand: Command = {
       }
 
       try {
-        db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+        deleteTask(taskId);
         await interaction.reply({
           content: `Successfully deleted task **${task.title}**! 🗑️`
         });
