@@ -4,6 +4,20 @@ import { Event } from '../types';
 const interactionCreateEvent: Event = {
   name: Events.InteractionCreate,
   async execute(interaction: Interaction) {
+    if (interaction.isAutocomplete()) {
+      const command = interaction.client.commands.get(interaction.commandName);
+      if (!command) return;
+
+      try {
+        if (command.autocomplete) {
+          await command.autocomplete(interaction);
+        }
+      } catch (error) {
+        console.error(`Error running autocomplete for command ${interaction.commandName}:`, error);
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const command = interaction.client.commands.get(interaction.commandName);
