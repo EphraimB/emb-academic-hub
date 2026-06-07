@@ -1,41 +1,48 @@
-import { Client, Collection, GatewayIntentBits } from 'discord.js';
 import * as dotenv from 'dotenv';
-import { commandsList } from './commands';
-import { eventsList } from './events';
+import { initDb } from './db/init';
+import { Scheduler } from './core/scheduler';
+import { checkCommuteAlerts } from './features/commute';
+import { startBot } from './discord/bot';
 
-// Load environment variables from .env
+// Load environment variables
 dotenv.config();
 
-const token = process.env.DISCORD_TOKEN;
-if (!token) {
-  console.error('Error: DISCORD_TOKEN is missing in environment variables.');
-  process.exit(1);
-}
+async function main() {
+  console.log('=== Starting Application ===');
 
-// Create a new client instance
-// For basic slash commands, Guilds intent is sufficient.
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-  ],
-});
+  // 1. Initialize database
+  await initDb();
 
-// Initialize the commands collection
-client.commands = new Collection();
+  // 2. Initialize and start the core scheduler
+  const scheduler = new Scheduler();
+  
+  // Register commute alerts check job to run every 5 minutes (300,000 ms)
+  scheduler.registerJob({
+    id: 'commute-alerts',
+    intervalMs: 300000,
+    execute: () => {
+      checkCommuteAlerts();
+    }
+  });
 
-// Register commands in the client
-for (const command of commandsList) {
-  client.commands.set(command.data.name, command);
-}
+  scheduler.start();
 
-// Register event listeners
-for (const event of eventsList) {
-  if (event.once) {
-    client.once(event.name, (...args) => event.execute(...args));
-  } else {
-    client.on(event.name, (...args) => event.execute(...args));
+  // 3. Start the Discord Bot interface
+  const token = process.env.DISCORD_TOKEN;
+  if (!token) {
+    console.error('[Error] DISCORD_TOKEN is missing in environment variables. Bot login skipped.');
+    return;
+  }
+
+  try {
+    await startBot(token);
+  } catch (err) {
+    console.error('[Error] Failed to start Discord Bot:', err);
   }
 }
 
-// Log in to Discord
-client.login(token);
+// Start orchestration
+main().catch(err => {
+  console.error('Fatal application error:', err);
+  process.exit(1);
+});

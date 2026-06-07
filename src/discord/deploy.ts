@@ -14,9 +14,7 @@ if (!token || !clientId) {
   process.exit(1);
 }
 
-// Convert commands to JSON representation for the API
 const commandsJSON = commandsList.map(command => command.data.toJSON());
-
 const rest = new REST({ version: '10' }).setToken(token);
 
 (async () => {
