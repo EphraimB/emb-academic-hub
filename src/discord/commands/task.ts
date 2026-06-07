@@ -1,7 +1,15 @@
 import { SlashCommandBuilder, AutocompleteInteraction, ChatInputCommandInteraction } from 'discord.js';
 import { randomUUID } from 'crypto';
 import { Command } from '../types';
-import { findCourseByName, addAssignment, addTask, setTaskCompletion } from '../../db/queries';
+import { 
+  findCourseByName, 
+  addAssignment, 
+  addTask, 
+  setTaskCompletion, 
+  getAllSemesters, 
+  addSemester, 
+  addCourse 
+} from '../../db/queries';
 import { db } from '../../db/init';
 
 const taskCommand: Command = {
@@ -60,12 +68,50 @@ const taskCommand: Command = {
       const title = interaction.options.getString('title', true);
       const minutes = interaction.options.getInteger('minutes', true);
 
-      // 1. Resolve Course
-      const course = findCourseByName(courseName);
+      // 1. Resolve Course (or auto-create if not found)
+      let course = findCourseByName(courseName);
+      if (!course) {
+        // Resolve or create default semester
+        let semester = getAllSemesters()[0];
+        let semesterId = '';
+        if (semester) {
+          semesterId = semester.id;
+        } else {
+          semesterId = randomUUID();
+          try {
+            addSemester(semesterId, 'General Semester');
+          } catch (err) {
+            console.error('Error creating default semester:', err);
+            await interaction.reply({
+              content: 'Failed to initialize default academic semester.',
+              flags: ['Ephemeral'] as any
+            });
+            return;
+          }
+        }
+
+        // Auto-create course
+        const courseId = randomUUID();
+        try {
+          addCourse({
+            id: courseId,
+            semesterId,
+            name: courseName,
+            meetingDays: JSON.stringify([1, 3, 5]), // Default: Days 1, 3, 5 (MWF)
+            startTime: 600, // Default: 10:00 AM (600 mins from midnight)
+            endTime: 690, // Default: 11:30 AM (690 mins from midnight)
+            location: 'N/A'
+          });
+          course = findCourseByName(courseName);
+        } catch (err) {
+          console.error('Error auto-creating course:', err);
+        }
+      }
+
       if (!course) {
         await interaction.reply({
-          content: `Error: Course **${courseName}** was not found. Please create it first using \`/addcourse\`.`,
-          ephemeral: true
+          content: `Failed to resolve or auto-create course **${courseName}**.`,
+          flags: ['Ephemeral'] as any
         });
         return;
       }
@@ -91,7 +137,7 @@ const taskCommand: Command = {
           console.error('Error creating default assignment:', err);
           await interaction.reply({
             content: 'Failed to initialize general tasks list for this course.',
-            ephemeral: true
+            flags: ['Ephemeral'] as any
           });
           return;
         }
@@ -109,14 +155,13 @@ const taskCommand: Command = {
         });
 
         await interaction.reply({
-          content: `Successfully added task **${title}** under course **${course.name}**!\n• Duration: \`${minutes} mins\``,
-          ephemeral: false
+          content: `Successfully added task **${title}** under course **${course.name}**!\n• Duration: \`${minutes} mins\``
         });
       } catch (err) {
         console.error('Error adding task:', err);
         await interaction.reply({
           content: 'Failed to create the task.',
-          ephemeral: true
+          flags: ['Ephemeral'] as any
         });
       }
       return;
@@ -134,22 +179,16 @@ const taskCommand: Command = {
         if (!course) {
           await interaction.reply({
             content: `Course **${courseName}** was not found. Use \`/courses\` to list all courses.`,
-            ephemeral: true
+            flags: ['Ephemeral'] as any
           });
           return;
         }
 
-        const tasks = db.prepare(`
-          SELECT t.title, t.estimatedMinutes, t.completed 
-          FROM tasks t
-          JOIN assignments a ON t.assignmentId = a.id
-          WHERE a.courseId = ?
-        `).all(course.id) as { title: string; estimatedMinutes: number; completed: number }[];
+        const tasks = db.prepare('SELECT t.title, t.estimatedMinutes, t.completed FROM tasks t JOIN assignments a ON t.assignmentId = a.id WHERE a.courseId = ?').all(course.id) as { title: string; estimatedMinutes: number; completed: number }[];
 
         if (tasks.length === 0) {
           await interaction.reply({
-            content: `No tasks found for course **${course.name}**.`,
-            ephemeral: false
+            content: `No tasks found for course **${course.name}**.`
           });
           return;
         }
@@ -160,8 +199,7 @@ const taskCommand: Command = {
         }).join('\n\n');
 
         await interaction.reply({
-          content: `### Tasks for **${course.name}**:\n\n${list}`,
-          ephemeral: false
+          content: `### Tasks for **${course.name}**:\n\n${list}`
         });
       } else {
         // List all tasks grouped by course name
@@ -176,7 +214,7 @@ const taskCommand: Command = {
         if (tasks.length === 0) {
           await interaction.reply({
             content: 'No tasks registered in the database yet. Use `/task add` to add your first one!',
-            ephemeral: true
+            flags: ['Ephemeral'] as any
           });
           return;
         }
@@ -200,8 +238,7 @@ const taskCommand: Command = {
         }
 
         await interaction.reply({
-          content: output,
-          ephemeral: false
+          content: output
         });
       }
       return;
@@ -218,7 +255,7 @@ const taskCommand: Command = {
       if (!task) {
         await interaction.reply({
           content: 'Error: Selected task was not found. It may have been deleted.',
-          ephemeral: true
+          flags: ['Ephemeral'] as any
         });
         return;
       }
@@ -226,14 +263,13 @@ const taskCommand: Command = {
       try {
         setTaskCompletion(taskId, 1);
         await interaction.reply({
-          content: `Successfully marked task **${task.title}** as Completed! ✅`,
-          ephemeral: false
+          content: `Successfully marked task **${task.title}** as Completed! ✅`
         });
       } catch (err) {
         console.error('Error completing task:', err);
         await interaction.reply({
           content: 'Failed to mark task as completed.',
-          ephemeral: true
+          flags: ['Ephemeral'] as any
         });
       }
       return;

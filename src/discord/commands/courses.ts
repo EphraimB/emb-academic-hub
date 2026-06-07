@@ -19,16 +19,15 @@ const coursesCommand: Command = {
       const semesters = getAllSemesters();
       if (semesters.length === 0) {
         await interaction.reply({
-          content: 'No semesters are registered in the database yet. Use `/addcourse` to add your first course and semester!',
-          ephemeral: true
+          content: 'No semesters are registered in the database yet. Use `/task add` to add your first course and task!',
+          flags: ['Ephemeral'] as any
         });
         return;
       }
 
       const list = semesters.map(s => `• **${s.name}**`).join('\n');
       await interaction.reply({
-        content: `### Registered Semesters:\n${list}\n\n*Type \`/courses [semester-name]\` to list courses inside a semester.*`,
-        ephemeral: false
+        content: `### Registered Semesters:\n${list}\n\n*Type \`/courses [semester-name]\` to list courses inside a semester.*`
       });
       return;
     }
@@ -40,7 +39,7 @@ const coursesCommand: Command = {
     if (!matched) {
       await interaction.reply({
         content: `Semester **${semesterName}** was not found. Use \`/courses\` (without options) to list all available semesters.`,
-        ephemeral: true
+        flags: ['Ephemeral'] as any
       });
       return;
     }
@@ -49,8 +48,7 @@ const coursesCommand: Command = {
     const courses = getCoursesBySemester(matched.id);
     if (courses.length === 0) {
       await interaction.reply({
-        content: `No courses registered under semester **${matched.name}** yet.`,
-        ephemeral: false
+        content: `No courses registered under semester **${matched.name}** yet.`
       });
       return;
     }
@@ -82,8 +80,7 @@ const coursesCommand: Command = {
     }).join('\n\n');
 
     await interaction.reply({
-      content: `### Courses for **${matched.name}**:\n\n${list}`,
-      ephemeral: false
+      content: `### Courses for **${matched.name}**:\n\n${list}`
     });
   },
 };

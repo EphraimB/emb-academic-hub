@@ -31,7 +31,7 @@ const interactionCreateEvent: Event = {
       await command.execute(interaction);
     } catch (error) {
       console.error(`Error executing command ${interaction.commandName}:`, error);
-      const responsePayload = { content: 'There was an error while executing this command!', ephemeral: true };
+      const responsePayload = { content: 'There was an error while executing this command!', flags: ['Ephemeral'] as any };
       
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp(responsePayload);

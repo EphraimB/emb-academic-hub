@@ -1,4 +1,5 @@
 import { db } from './init';
+import { TaskItem } from '../core/scheduler';
 
 export interface Semester {
   id: string;
@@ -102,4 +103,16 @@ export function findTaskByTitle(title: string): Task | null {
 export function setTaskCompletion(taskId: string, completed: number): void {
   const stmt = db.prepare('UPDATE tasks SET completed = ? WHERE id = ?');
   stmt.run(completed, taskId);
+}
+
+// Scheduler Query Helper
+export function getPendingTasksWithPriority(): TaskItem[] {
+  const stmt = db.prepare(`
+    SELECT t.id, t.title, t.estimatedMinutes, a.priority, c.name as courseName
+    FROM tasks t
+    JOIN assignments a ON t.assignmentId = a.id
+    JOIN courses c ON a.courseId = c.id
+    WHERE t.completed = 0
+  `);
+  return stmt.all() as TaskItem[];
 }
