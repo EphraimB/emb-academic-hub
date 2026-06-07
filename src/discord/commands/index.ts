@@ -1,8 +1,10 @@
 import ping from './ping';
-import available from './available';
+import addcourse from './addcourse';
+import courses from './courses';
 import { Command } from '../types';
 
 export const commandsList: Command[] = [
   ping,
-  available
+  addcourse,
+  courses
 ];

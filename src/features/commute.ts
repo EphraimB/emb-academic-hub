@@ -1,5 +1,3 @@
-import { setUserAvailability, getUserAvailability } from '../db/queries';
-
 export interface CommutePreference {
   userId: string;
   username: string;
@@ -7,8 +5,7 @@ export interface CommutePreference {
 }
 
 export function updateCommuteStatus(userId: string, username: string, status: 'available' | 'busy' | 'away'): void {
-  console.log(`[Feature - Commute] Updating commute status for user ${username} (${userId}) to ${status}`);
-  setUserAvailability(userId, username, status);
+  console.log(`[Feature - Commute] (Mock) Update status for user ${username} (${userId}) to ${status}`);
 }
 
 export function checkCommuteAlerts(): void {

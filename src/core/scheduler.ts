@@ -1,5 +1,4 @@
 import { SchedulerJob } from './types';
-import { logSchedulerRun } from '../db/queries';
 
 export class Scheduler {
   private jobs: SchedulerJob[] = [];
@@ -12,14 +11,13 @@ export class Scheduler {
   public start(): void {
     console.log(`[Scheduler] Initializing scheduler with ${this.jobs.length} custom jobs...`);
     
-    // Setup a default heartbeat job that tracks execution logs in our DB
+    // Setup a default heartbeat job
     const heartbeatJob: SchedulerJob = {
       id: 'heartbeat',
       intervalMs: 60000, // Every 1 minute
       execute: () => {
         const totalJobs = this.jobs.length + 1; // Including itself
         console.log(`[Scheduler] Heartbeat check. Active jobs: ${totalJobs}`);
-        logSchedulerRun(totalJobs);
       }
     };
     
