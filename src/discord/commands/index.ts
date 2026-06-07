@@ -5,6 +5,7 @@ import available from './available';
 import semester from './semester';
 import assignment from './assignment';
 import today from './today';
+import week from './week';
 import { Command } from '../types';
 
 export const commandsList: Command[] = [
@@ -14,7 +15,9 @@ export const commandsList: Command[] = [
   available,
   semester,
   assignment,
-  today
+  today,
+  week
 ];
+
 
 
