@@ -22,9 +22,24 @@ export async function initDb(): Promise<void> {
   db.prepare(`
     CREATE TABLE IF NOT EXISTS semesters (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL
+      name TEXT NOT NULL,
+      isCurrent INTEGER NOT NULL DEFAULT 0 CHECK (isCurrent IN (0, 1)),
+      isArchived INTEGER NOT NULL DEFAULT 0 CHECK (isArchived IN (0, 1))
     )
   `).run();
+
+  // Run self-migration check for existing databases that lack the new columns
+  try {
+    const tableInfo = db.pragma('table_info(semesters)') as { name: string }[];
+    const hasIsCurrent = tableInfo.some(col => col.name === 'isCurrent');
+    if (!hasIsCurrent) {
+      db.prepare('ALTER TABLE semesters ADD COLUMN isCurrent INTEGER NOT NULL DEFAULT 0 CHECK (isCurrent IN (0, 1))').run();
+      db.prepare('ALTER TABLE semesters ADD COLUMN isArchived INTEGER NOT NULL DEFAULT 0 CHECK (isArchived IN (0, 1))').run();
+      console.log('[Database] Migrated semesters table structure successfully.');
+    }
+  } catch (err) {
+    console.error('[Database] Failed to migrate semesters table columns:', err);
+  }
 
   // Create courses table
   db.prepare(`

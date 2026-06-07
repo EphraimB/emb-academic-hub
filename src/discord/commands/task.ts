@@ -2,11 +2,12 @@ import { SlashCommandBuilder, AutocompleteInteraction, ChatInputCommandInteracti
 import { randomUUID } from 'crypto';
 import { Command } from '../types';
 import { 
-  findCourseByName, 
+  findCourseInCurrentSemester, 
   addAssignment, 
   addTask, 
   setTaskCompletion, 
   getAllSemesters, 
+  getCurrentSemester,
   addSemester, 
   addCourse 
 } from '../../db/queries';
@@ -72,48 +73,56 @@ const taskCommand: Command = {
     const subcommand = interaction.options.getSubcommand();
 
     // ==========================================
-    // SUBCOMMAND: /task add (Create)
+    // SUBCOMMAND: /task add
     // ==========================================
     if (subcommand === 'add') {
       const courseName = interaction.options.getString('course', true);
       const title = interaction.options.getString('title', true);
       const minutes = interaction.options.getInteger('minutes', true);
 
-      // 1. Resolve Course (or auto-create if not found)
-      let course = findCourseByName(courseName);
-      if (!course) {
-        // Resolve or create default semester
-        let semester = getAllSemesters()[0];
-        let semesterId = '';
-        if (semester) {
-          semesterId = semester.id;
-        } else {
-          semesterId = randomUUID();
-          try {
-            addSemester(semesterId, 'General Semester');
-          } catch (err) {
-            console.error('Error creating default semester:', err);
-            await interaction.reply({
-              content: 'Failed to initialize default academic semester.',
-              flags: ['Ephemeral'] as any
-            });
-            return;
-          }
+      // 1. Resolve Active Semester (create if missing)
+      let semester = getCurrentSemester();
+      let semesterId = '';
+      if (semester) {
+        semesterId = semester.id;
+      } else {
+        semesterId = randomUUID();
+        try {
+          addSemester(semesterId, 'General Semester', 1); // 1 = isCurrent
+          semester = getCurrentSemester();
+        } catch (err) {
+          console.error('Error creating default semester:', err);
+          await interaction.reply({
+            content: 'Failed to initialize default academic semester.',
+            flags: ['Ephemeral'] as any
+          });
+          return;
         }
+      }
 
-        // Auto-create course
+      if (!semester) {
+        await interaction.reply({
+          content: 'No active semester set.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
+
+      // 2. Resolve Course in current semester (or auto-create)
+      let course = findCourseInCurrentSemester(courseName);
+      if (!course) {
         const courseId = randomUUID();
         try {
           addCourse({
             id: courseId,
-            semesterId,
+            semesterId: semester.id,
             name: courseName,
-            meetingDays: JSON.stringify([1, 3, 5]), // Default: Days 1, 3, 5 (MWF)
-            startTime: 600, // Default: 10:00 AM (600 mins from midnight)
-            endTime: 690, // Default: 11:30 AM (690 mins from midnight)
+            meetingDays: JSON.stringify([1, 3, 5]), // Default MWF
+            startTime: 600, // Default 10:00 AM
+            endTime: 690, // Default 11:30 AM
             location: 'N/A'
           });
-          course = findCourseByName(courseName);
+          course = findCourseInCurrentSemester(courseName);
         } catch (err) {
           console.error('Error auto-creating course:', err);
         }
@@ -121,13 +130,13 @@ const taskCommand: Command = {
 
       if (!course) {
         await interaction.reply({
-          content: `Failed to resolve or auto-create course **${courseName}**.`,
+          content: `Failed to resolve or auto-create course **${courseName}** under semester **${semester.name}**.`,
           flags: ['Ephemeral'] as any
         });
         return;
       }
 
-      // 2. Resolve or Create Default Assignment ("General Tasks")
+      // 3. Resolve or Create Default Assignment ("General Tasks")
       let assignment = db.prepare('SELECT id FROM assignments WHERE courseId = ? AND title = ?')
         .get(course.id, 'General Tasks') as { id: string } | undefined;
       
@@ -154,7 +163,7 @@ const taskCommand: Command = {
         }
       }
 
-      // 3. Insert Task
+      // 4. Insert Task
       const taskId = randomUUID();
       try {
         addTask({
@@ -179,23 +188,37 @@ const taskCommand: Command = {
     }
 
     // ==========================================
-    // SUBCOMMAND: /task list (Read)
+    // SUBCOMMAND: /task list
     // ==========================================
     if (subcommand === 'list') {
       const courseName = interaction.options.getString('course');
+      const semester = getCurrentSemester();
+      
+      if (!semester) {
+        await interaction.reply({
+          content: 'No semester is active. Use \`/semester switch\` to activate one.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
 
       if (courseName) {
-        // List tasks for specific course
-        const course = findCourseByName(courseName);
+        // List tasks for specific course in current active semester
+        const course = findCourseInCurrentSemester(courseName);
         if (!course) {
           await interaction.reply({
-            content: `Course **${courseName}** was not found. Use \`/courses\` to list all courses.`,
+            content: `Course **${courseName}** was not found in the current active semester (${semester.name}).`,
             flags: ['Ephemeral'] as any
           });
           return;
         }
 
-        const tasks = db.prepare('SELECT t.title, t.estimatedMinutes, t.completed FROM tasks t JOIN assignments a ON t.assignmentId = a.id WHERE a.courseId = ?').all(course.id) as { title: string; estimatedMinutes: number; completed: number }[];
+        const tasks = db.prepare(`
+          SELECT t.title, t.estimatedMinutes, t.completed 
+          FROM tasks t 
+          JOIN assignments a ON t.assignmentId = a.id 
+          WHERE a.courseId = ?
+        `).all(course.id) as { title: string; estimatedMinutes: number; completed: number }[];
 
         if (tasks.length === 0) {
           await interaction.reply({
@@ -210,21 +233,22 @@ const taskCommand: Command = {
         }).join('\n\n');
 
         await interaction.reply({
-          content: `### Tasks for **${course.name}**:\n\n${list}`
+          content: `### Tasks for **${course.name}** (*${semester.name}*):\n\n${list}`
         });
       } else {
-        // List all tasks grouped by course name
+        // List all tasks in current active semester grouped by course name
         const tasks = db.prepare(`
           SELECT t.title, t.estimatedMinutes, t.completed, c.name as courseName
           FROM tasks t
           JOIN assignments a ON t.assignmentId = a.id
           JOIN courses c ON a.courseId = c.id
+          WHERE c.semesterId = ?
           ORDER BY c.name ASC
-        `).all() as { title: string; estimatedMinutes: number; completed: number; courseName: string }[];
+        `).all(semester.id) as { title: string; estimatedMinutes: number; completed: number; courseName: string }[];
 
         if (tasks.length === 0) {
           await interaction.reply({
-            content: 'No tasks registered in the database yet. Use `/task add` to add your first one!',
+            content: `No tasks registered in the active semester **${semester.name}** yet. Use \`/task add\` to add your first one!`,
             flags: ['Ephemeral'] as any
           });
           return;
@@ -239,7 +263,7 @@ const taskCommand: Command = {
           grouped[t.courseName].push(t);
         }
 
-        let output = '### All Academic Tasks:\n\n';
+        let output = `### Academic Tasks for **${semester.name}**:\n\n`;
         for (const [course, courseTasks] of Object.entries(grouped)) {
           output += `📚 **${course}**\n`;
           output += courseTasks.map(t => {
@@ -256,16 +280,31 @@ const taskCommand: Command = {
     }
 
     // ==========================================
-    // SUBCOMMAND: /task done (Update)
+    // SUBCOMMAND: /task done
     // ==========================================
     if (subcommand === 'done') {
       const taskId = interaction.options.getString('id', true);
+      const semester = getCurrentSemester();
 
-      // Verify task exists
-      const task = db.prepare('SELECT title FROM tasks WHERE id = ?').get(taskId) as { title: string } | undefined;
+      if (!semester) {
+        await interaction.reply({
+          content: 'No semester is currently active.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
+
+      // Verify task exists in active semester
+      const task = db.prepare(`
+        SELECT t.title FROM tasks t 
+        JOIN assignments a ON t.assignmentId = a.id
+        JOIN courses c ON a.courseId = c.id
+        WHERE t.id = ? AND c.semesterId = ?
+      `).get(taskId, semester.id) as { title: string } | undefined;
+
       if (!task) {
         await interaction.reply({
-          content: 'Error: Selected task was not found. It may have been deleted.',
+          content: 'Error: Selected task was not found or is in another semester.',
           flags: ['Ephemeral'] as any
         });
         return;
@@ -287,13 +326,28 @@ const taskCommand: Command = {
     }
 
     // ==========================================
-    // SUBCOMMAND: /task delete (Delete)
+    // SUBCOMMAND: /task delete
     // ==========================================
     if (subcommand === 'delete') {
       const taskId = interaction.options.getString('id', true);
+      const semester = getCurrentSemester();
 
-      // Verify task exists
-      const task = db.prepare('SELECT title FROM tasks WHERE id = ?').get(taskId) as { title: string } | undefined;
+      if (!semester) {
+        await interaction.reply({
+          content: 'No semester is currently active.',
+          flags: ['Ephemeral'] as any
+        });
+        return;
+      }
+
+      // Verify task exists in active semester
+      const task = db.prepare(`
+        SELECT t.title FROM tasks t 
+        JOIN assignments a ON t.assignmentId = a.id
+        JOIN courses c ON a.courseId = c.id
+        WHERE t.id = ? AND c.semesterId = ?
+      `).get(taskId, semester.id) as { title: string } | undefined;
+
       if (!task) {
         await interaction.reply({
           content: 'Error: Selected task was not found.',
@@ -321,28 +375,34 @@ const taskCommand: Command = {
   async autocomplete(interaction: AutocompleteInteraction) {
     const focusedValue = interaction.options.getFocused();
     const subcommand = interaction.options.getSubcommand();
+    const semester = getCurrentSemester();
+
+    if (!semester) {
+      await interaction.respond([]);
+      return;
+    }
 
     try {
-      // If marking done, show only pending tasks. If deleting, show all tasks.
+      // Find all tasks associated with courses inside the current active semester
       const query = subcommand === 'done'
         ? `SELECT t.id, t.title, c.name as courseName 
            FROM tasks t
            JOIN assignments a ON t.assignmentId = a.id
            JOIN courses c ON a.courseId = c.id
-           WHERE t.completed = 0`
+           WHERE t.completed = 0 AND c.semesterId = ?`
         : `SELECT t.id, t.title, c.name as courseName 
            FROM tasks t
            JOIN assignments a ON t.assignmentId = a.id
-           JOIN courses c ON a.courseId = c.id`;
+           JOIN courses c ON a.courseId = c.id
+           WHERE c.semesterId = ?`;
 
-      const tasks = db.prepare(query).all() as { id: string; title: string; courseName: string }[];
+      const tasks = db.prepare(query).all(semester.id) as { id: string; title: string; courseName: string }[];
 
       // Filter based on input
       const filtered = tasks
         .filter(t => t.title.toLowerCase().includes(focusedValue.toLowerCase()))
         .map(t => {
           const name = `${t.title} [${t.courseName}]`;
-          // Truncate name to 100 characters if it exceeds limit
           const displayName = name.length > 100 ? name.substring(0, 97) + '...' : name;
           return {
             name: displayName,

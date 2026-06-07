@@ -1,12 +1,17 @@
 import ping from './ping';
-import courses from './courses';
+import course from './course';
 import task from './task';
 import available from './available';
+import semester from './semester';
+import assignment from './assignment';
 import { Command } from '../types';
 
 export const commandsList: Command[] = [
   ping,
-  courses,
+  course,
   task,
-  available
+  available,
+  semester,
+  assignment
 ];
+
