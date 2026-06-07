@@ -1,4 +1,13 @@
-import { SlashCommandBuilder, AutocompleteInteraction, ChatInputCommandInteraction } from 'discord.js';
+import { 
+  SlashCommandBuilder, 
+  AutocompleteInteraction, 
+  ChatInputCommandInteraction,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder
+} from 'discord.js';
 import { randomUUID } from 'crypto';
 import { Command } from '../types';
 import { 
@@ -12,6 +21,50 @@ import {
   addSemester
 } from '../../db/queries';
 import { db } from '../../db/init';
+
+function parseTimeToMinutes(timeStr: string): number | null {
+  const regex = /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i;
+  const match = timeStr.trim().match(regex);
+  if (!match) return null;
+
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const ampm = match[3];
+
+  if (hours < 0 || minutes < 0 || minutes >= 60) return null;
+
+  if (ampm) {
+    const ampmUpper = ampm.toUpperCase();
+    if (hours < 1 || hours > 12) return null;
+    if (ampmUpper === 'PM' && hours !== 12) {
+      hours += 12;
+    } else if (ampmUpper === 'AM' && hours === 12) {
+      hours = 0;
+    }
+  } else {
+    if (hours < 0 || hours >= 24) return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function formatMeetingDays(meetingDaysJson: string): string {
+  try {
+    const days = JSON.parse(meetingDaysJson) as number[];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const mapped = days.map(d => dayNames[d]);
+    
+    const sorted = [...days].sort((a, b) => a - b);
+    const sortedStr = sorted.join(',');
+    if (sortedStr === '1,3,5') return 'Monday, Wednesday, Friday (MWF)';
+    if (sortedStr === '2,4') return 'Tuesday, Thursday (TTh)';
+    if (sortedStr === '1,3') return 'Monday, Wednesday (MW)';
+    
+    return mapped.join(', ');
+  } catch (err) {
+    return 'N/A';
+  }
+}
 
 const courseCommand: Command = {
   data: new SlashCommandBuilder()
@@ -27,18 +80,13 @@ const courseCommand: Command = {
             .setRequired(true)
         )
         .addStringOption(option =>
-          option.setName('days')
-            .setDescription('Meeting days (e.g. 1,3,5 for MWF)')
-            .setRequired(false)
-        )
-        .addIntegerOption(option =>
           option.setName('start-time')
-            .setDescription('Start time in minutes from midnight (default: 600 for 10:00 AM)')
+            .setDescription('Start time (e.g. 10:00 AM or 14:30)')
             .setRequired(false)
         )
-        .addIntegerOption(option =>
+        .addStringOption(option =>
           option.setName('end-time')
-            .setDescription('End time in minutes from midnight (default: 690 for 11:30 AM)')
+            .setDescription('End time (e.g. 11:30 AM or 16:00)')
             .setRequired(false)
         )
         .addStringOption(option =>
@@ -72,19 +120,19 @@ const courseCommand: Command = {
             .setDescription('New course name')
             .setRequired(false)
         )
+        .addBooleanOption(option =>
+          option.setName('change-days')
+            .setDescription('Set to True to update the meeting days dropdown menu')
+            .setRequired(false)
+        )
         .addStringOption(option =>
-          option.setName('days')
-            .setDescription('Update meeting days (e.g. 1,3 for TTh)')
-            .setRequired(false)
-        )
-        .addIntegerOption(option =>
           option.setName('start-time')
-            .setDescription('Update start time in minutes from midnight')
+            .setDescription('Update start time (e.g. 10:00 AM or 14:30)')
             .setRequired(false)
         )
-        .addIntegerOption(option =>
+        .addStringOption(option =>
           option.setName('end-time')
-            .setDescription('Update end time in minutes from midnight')
+            .setDescription('Update end time (e.g. 11:30 AM or 16:00)')
             .setRequired(false)
         )
         .addStringOption(option =>
@@ -112,9 +160,8 @@ const courseCommand: Command = {
     // ==========================================
     if (subcommand === 'create') {
       const name = interaction.options.getString('name', true);
-      const days = interaction.options.getString('days') || '1,3,5';
-      const startTime = interaction.options.getInteger('start-time') ?? 600;
-      const endTime = interaction.options.getInteger('end-time') ?? 690;
+      const startTimeStr = interaction.options.getString('start-time');
+      const endTimeStr = interaction.options.getString('end-time');
       const location = interaction.options.getString('location') || 'N/A';
 
       // 1. Resolve current active semester
@@ -143,33 +190,146 @@ const courseCommand: Command = {
         return;
       }
 
-      // 2. Parse meetingDays
-      const daysArray = days.split(',').map(d => parseInt(d.trim(), 10)).filter(d => !isNaN(d));
-      const meetingDaysJSON = JSON.stringify(daysArray);
+      // 2. Parse times
+      let startTime = 600;
+      if (startTimeStr) {
+        const parsed = parseTimeToMinutes(startTimeStr);
+        if (parsed === null) {
+          await interaction.reply({
+            content: `Error: Invalid start time format **"${startTimeStr}"**. Please use formats like \`10:00 AM\` or \`14:30\`.`,
+            flags: ['Ephemeral'] as any
+          });
+          return;
+        }
+        startTime = parsed;
+      }
 
-      // 3. Add to Database
-      const courseId = randomUUID();
-      try {
-        addCourse({
-          id: courseId,
-          semesterId: semester.id,
-          name,
-          meetingDays: meetingDaysJSON,
-          startTime,
-          endTime,
-          location
-        });
+      let endTime = 690;
+      if (endTimeStr) {
+        const parsed = parseTimeToMinutes(endTimeStr);
+        if (parsed === null) {
+          await interaction.reply({
+            content: `Error: Invalid end time format **"${endTimeStr}"**. Please use formats like \`11:30 AM\` or \`16:00\`.`,
+            flags: ['Ephemeral'] as any
+          });
+          return;
+        }
+        endTime = parsed;
+      }
 
+      if (endTime <= startTime) {
         await interaction.reply({
-          content: `Successfully created course **${name}** under active semester **${semester.name}**!\n• Location: \`${location}\`\n• Schedule: Days \`${days}\`, \`${startTime}\` to \`${endTime}\` minutes from midnight.`
-        });
-      } catch (err) {
-        console.error('Error creating course:', err);
-        await interaction.reply({
-          content: 'Failed to create course.',
+          content: `Error: End time must be after start time.`,
           flags: ['Ephemeral'] as any
         });
+        return;
       }
+
+      // 3. Render select menu and button components
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('select_course_days_create')
+        .setPlaceholder('Select meeting days...')
+        .setMinValues(1)
+        .setMaxValues(7)
+        .addOptions(
+          new StringSelectMenuOptionBuilder().setLabel('Monday').setValue('1'),
+          new StringSelectMenuOptionBuilder().setLabel('Tuesday').setValue('2'),
+          new StringSelectMenuOptionBuilder().setLabel('Wednesday').setValue('3'),
+          new StringSelectMenuOptionBuilder().setLabel('Thursday').setValue('4'),
+          new StringSelectMenuOptionBuilder().setLabel('Friday').setValue('5'),
+          new StringSelectMenuOptionBuilder().setLabel('Saturday').setValue('6'),
+          new StringSelectMenuOptionBuilder().setLabel('Sunday').setValue('0')
+        );
+
+      const confirmButton = new ButtonBuilder()
+        .setCustomId('confirm_course_days_create')
+        .setLabel('Confirm Days')
+        .setStyle(ButtonStyle.Success);
+
+      const row1 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+      const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButton);
+
+      const response = await interaction.reply({
+        content: `📚 **Creating Course "${name}":** Select the meeting days using the dropdown below, then click **Confirm Days**:`,
+        components: [row1, row2],
+        fetchReply: true
+      });
+
+      const collector = response.createMessageComponentCollector({
+        time: 60000
+      });
+
+      let selectedDays: number[] = [];
+
+      collector.on('collect', async i => {
+        if (i.user.id !== interaction.user.id) {
+          await i.reply({
+            content: 'Error: Only the user who ran the command can use these controls.',
+            flags: ['Ephemeral'] as any
+          });
+          return;
+        }
+
+        if (i.isStringSelectMenu() && i.customId === 'select_course_days_create') {
+          selectedDays = i.values.map((v: string) => parseInt(v, 10));
+          await i.deferUpdate();
+        } else if (i.customId === 'confirm_course_days_create') {
+          if (selectedDays.length === 0) {
+            await i.reply({
+              content: 'Error: You must select at least one day.',
+              flags: ['Ephemeral'] as any
+            });
+            return;
+          }
+
+          const meetingDaysJSON = JSON.stringify(selectedDays);
+          const courseId = randomUUID();
+
+          try {
+            addCourse({
+              id: courseId,
+              semesterId: semester!.id,
+              name,
+              meetingDays: meetingDaysJSON,
+              startTime,
+              endTime,
+              location
+            });
+
+            const formatTime = (min: number) => {
+              const h = Math.floor(min / 60);
+              const m = min % 60;
+              const ampm = h >= 12 ? 'PM' : 'AM';
+              const formattedH = h % 12 === 0 ? 12 : h % 12;
+              const formattedM = m < 10 ? `0${m}` : m;
+              return `${formattedH}:${formattedM} ${ampm}`;
+            };
+
+            collector.stop('submitted');
+
+            await i.update({
+              content: `Successfully created course **${name}** under active semester **${semester!.name}**!\n• Location: \`${location}\`\n• Schedule: \`${formatTime(startTime)} - ${formatTime(endTime)}\` on **${formatMeetingDays(meetingDaysJSON)}**`,
+              components: []
+            });
+          } catch (err) {
+            console.error('Error creating course:', err);
+            await i.reply({
+              content: 'Failed to create course.',
+              flags: ['Ephemeral'] as any
+            });
+          }
+        }
+      });
+
+      collector.on('end', (collected, reason) => {
+        if (reason !== 'submitted') {
+          interaction.editReply({
+            content: 'Course creation timed out.',
+            components: []
+          }).catch(console.error);
+        }
+      });
+
       return;
     }
 
@@ -219,13 +379,7 @@ const courseCommand: Command = {
       }
 
       const list = courses.map(c => {
-        let daysStr = 'N/A';
-        try {
-          const days = JSON.parse(c.meetingDays) as number[];
-          daysStr = days.join(', ');
-        } catch (err) {
-          console.error(err);
-        }
+        const daysStr = formatMeetingDays(c.meetingDays);
 
         const formatTime = (min: number) => {
           const h = Math.floor(min / 60);
@@ -239,7 +393,7 @@ const courseCommand: Command = {
         const startStr = formatTime(c.startTime);
         const endStr = formatTime(c.endTime);
 
-        return `• **${c.name}**\n  - Location: \`${c.location || 'N/A'}\`\n  - Time: \`${startStr} - ${endStr}\` on days \`[${daysStr}]\``;
+        return `• **${c.name}**\n  - Location: \`${c.location || 'N/A'}\`\n  - Time: \`${startStr} - ${endStr}\` on **${daysStr}**`;
       }).join('\n\n');
 
       await interaction.reply({
@@ -254,12 +408,12 @@ const courseCommand: Command = {
     if (subcommand === 'edit') {
       const courseId = interaction.options.getString('id', true);
       const name = interaction.options.getString('name');
-      const days = interaction.options.getString('days');
-      const startTime = interaction.options.getInteger('start-time');
-      const endTime = interaction.options.getInteger('end-time');
+      const changeDays = interaction.options.getBoolean('change-days') ?? false;
+      const startTimeStr = interaction.options.getString('start-time');
+      const endTimeStr = interaction.options.getString('end-time');
       const location = interaction.options.getString('location');
 
-      const course = db.prepare('SELECT name FROM courses WHERE id = ?').get(courseId) as { name: string } | undefined;
+      const course = db.prepare('SELECT name, startTime, endTime FROM courses WHERE id = ?').get(courseId) as { name: string; startTime: number; endTime: number } | undefined;
       if (!course) {
         await interaction.reply({
           content: 'Error: Course was not found.',
@@ -271,33 +425,149 @@ const courseCommand: Command = {
       const updates: any = {};
       if (name) updates.name = name;
       if (location) updates.location = location;
-      if (startTime !== null && startTime !== undefined) updates.startTime = startTime;
-      if (endTime !== null && endTime !== undefined) updates.endTime = endTime;
-      
-      if (days) {
-        const daysArray = days.split(',').map(d => parseInt(d.trim(), 10)).filter(d => !isNaN(d));
-        updates.meetingDays = JSON.stringify(daysArray);
+
+      let newStart = course.startTime;
+      let newEnd = course.endTime;
+
+      if (startTimeStr) {
+        const parsed = parseTimeToMinutes(startTimeStr);
+        if (parsed === null) {
+          await interaction.reply({
+            content: `Error: Invalid start time format **"${startTimeStr}"**. Please use formats like \`10:00 AM\` or \`14:30\`.`,
+            flags: ['Ephemeral'] as any
+          });
+          return;
+        }
+        updates.startTime = parsed;
+        newStart = parsed;
       }
 
-      if (Object.keys(updates).length === 0) {
+      if (endTimeStr) {
+        const parsed = parseTimeToMinutes(endTimeStr);
+        if (parsed === null) {
+          await interaction.reply({
+            content: `Error: Invalid end time format **"${endTimeStr}"**. Please use formats like \`11:30 AM\` or \`16:00\`.`,
+            flags: ['Ephemeral'] as any
+          });
+          return;
+        }
+        updates.endTime = parsed;
+        newEnd = parsed;
+      }
+
+      if (newEnd <= newStart) {
         await interaction.reply({
-          content: 'No updates specified. Use options to update fields.',
+          content: `Error: End time must be after start time.`,
           flags: ['Ephemeral'] as any
         });
         return;
       }
 
-      try {
-        updateCourse(courseId, updates);
-        await interaction.reply({
-          content: `Successfully updated details for course **${course.name}**! ✏9;`
+      if (changeDays) {
+        const selectMenu = new StringSelectMenuBuilder()
+          .setCustomId('select_course_days_edit')
+          .setPlaceholder('Select new meeting days...')
+          .setMinValues(1)
+          .setMaxValues(7)
+          .addOptions(
+            new StringSelectMenuOptionBuilder().setLabel('Monday').setValue('1'),
+            new StringSelectMenuOptionBuilder().setLabel('Tuesday').setValue('2'),
+            new StringSelectMenuOptionBuilder().setLabel('Wednesday').setValue('3'),
+            new StringSelectMenuOptionBuilder().setLabel('Thursday').setValue('4'),
+            new StringSelectMenuOptionBuilder().setLabel('Friday').setValue('5'),
+            new StringSelectMenuOptionBuilder().setLabel('Saturday').setValue('6'),
+            new StringSelectMenuOptionBuilder().setLabel('Sunday').setValue('0')
+          );
+
+        const confirmButton = new ButtonBuilder()
+          .setCustomId('confirm_course_days_edit')
+          .setLabel('Confirm Days')
+          .setStyle(ButtonStyle.Success);
+
+        const row1 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+        const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButton);
+
+        const response = await interaction.reply({
+          content: `✏️ **Editing Course "${course.name}":** Select the new meeting days using the dropdown below, then click **Confirm Days**:`,
+          components: [row1, row2],
+          fetchReply: true
         });
-      } catch (err) {
-        console.error('Error updating course:', err);
-        await interaction.reply({
-          content: 'Failed to update course.',
-          flags: ['Ephemeral'] as any
+
+        const collector = response.createMessageComponentCollector({
+          time: 60000
         });
+
+        let selectedDays: number[] = [];
+
+        collector.on('collect', async i => {
+          if (i.user.id !== interaction.user.id) {
+            await i.reply({
+              content: 'Error: Only the user who ran the command can use these controls.',
+              flags: ['Ephemeral'] as any
+            });
+            return;
+          }
+
+          if (i.isStringSelectMenu() && i.customId === 'select_course_days_edit') {
+            selectedDays = i.values.map((v: string) => parseInt(v, 10));
+            await i.deferUpdate();
+          } else if (i.customId === 'confirm_course_days_edit') {
+            if (selectedDays.length === 0) {
+              await i.reply({
+                content: 'Error: You must select at least one day.',
+                flags: ['Ephemeral'] as any
+              });
+              return;
+            }
+
+            updates.meetingDays = JSON.stringify(selectedDays);
+
+            try {
+              updateCourse(courseId, updates);
+              collector.stop('submitted');
+              await i.update({
+                content: `Successfully updated details and meeting days for course **${updates.name || course.name}**! ✏️`,
+                components: []
+              });
+            } catch (err) {
+              console.error('Error updating course:', err);
+              await i.reply({
+                content: 'Failed to update course.',
+                flags: ['Ephemeral'] as any
+              });
+            }
+          }
+        });
+
+        collector.on('end', (collected, reason) => {
+          if (reason !== 'submitted') {
+            interaction.editReply({
+              content: 'Course edit timed out.',
+              components: []
+            }).catch(console.error);
+          }
+        });
+      } else {
+        if (Object.keys(updates).length === 0) {
+          await interaction.reply({
+            content: 'No updates specified. Use options to update fields.',
+            flags: ['Ephemeral'] as any
+          });
+          return;
+        }
+
+        try {
+          updateCourse(courseId, updates);
+          await interaction.reply({
+            content: `Successfully updated details for course **${course.name}**! ✏️`
+          });
+        } catch (err) {
+          console.error('Error updating course:', err);
+          await interaction.reply({
+            content: 'Failed to update course.',
+            flags: ['Ephemeral'] as any
+          });
+        }
       }
       return;
     }
